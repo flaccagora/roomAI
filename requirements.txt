@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+requests
+python-dotenv
+APScheduler
+apify-client
+python-telegram-bot
+ollama

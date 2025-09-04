@@ -1,0 +1,23 @@
+
+services:
+  api:
+    build: .
+    container_name: apify-api
+    # Host networking so analyzer reaches Ollama at localhost:11434
+    network_mode: host
+    environment:
+      # Override DB path from env file to persist in volume
+      DB_PATH: /data/facebook_posts.db
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./data:/data
+      # Mount static only if you want to edit frontend live
+      # - ./static:/app/static:ro
+    restart: unless-stopped
+    # With host networking, do NOT declare ports.
+    # ports:
+    #   - "8000:8000"
+    # user: "${UID}:${GID}"
+
+

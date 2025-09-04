@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pipeline Control</title>
+  <style>
+    :root {
+      --bg: #ffffff;        --fg: #0f172a;
+      --muted-bg: #f6f8fa;  --muted-fg: #334155;
+      --border: #e2e8f0;    --thead: #f0f0f0;
+      --banner-bg: #fff4ce; --banner-border: #e0c97a;
+      --link: #0ea5e9;
+    }
+    body.dark {
+      --bg: #0b1220;        --fg: #e5e7eb;
+      --muted-bg: #121a2a;  --muted-fg: #cbd5e1;
+      --border: #243043;    --thead: #192338;
+      --banner-bg: #3b2e06; --banner-border: #665012;
+      --link: #38bdf8;
+    }
+    body { font-family: system-ui, -apple-system, Helvetica, Arial; padding: 20px; max-width: 1000px; background: var(--bg); color: var(--fg); }
+    a { color: var(--link); }
+    button { margin: 6px; padding: 8px 12px; }
+    input, select { padding: 6px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); }
+    pre { background: var(--muted-bg); color: var(--muted-fg); padding: 12px; border-radius: 6px; border: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid var(--border); padding: 8px; text-align: left; }
+    th { background: var(--thead); }
+    #notifyBanner { display:none; position: fixed; top: 0; left: 0; right: 0; background: var(--banner-bg); border-bottom: 1px solid var(--banner-border); padding: 10px 12px; z-index: 1000; }
+    #notifyBanner strong { margin-right: 10px; }
+    #notifyBanner button { margin-left: 8px; }
+    .spacer { height: 8px; }
+  </style>
+</head>
+<body>
+  <div id="notifyBanner">
+    <strong>New accepted post found</strong>
+    <button id="viewPostBtn">View</button>
+    <button id="dismissBannerBtn">Dismiss</button>
+  </div>
+  <h1>Pipeline Control</h1>
+  <div>
+    <label>Webhook URL (optional): <input id="webhook" placeholder="https://example.com/hook" size="40"></label>
+  </div>
+  <div style="margin-top:12px">
+    <label>Minutes: <input id="minutes" type="number" value="30" style="width:80px"></label>
+    <label style="margin-left:12px">
+      <input id="toggleDayNight" type="checkbox"> Use day/night schedule
+    </label>
+    <div id="dayNightWrap" style="display:none; margin-top:8px; padding:8px; border:1px dashed var(--border); border-radius:6px">
+      <div>
+        <label>Day minutes: <input id="dayMinutes" type="number" value="15" style="width:80px"></label>
+        <label style="margin-left:8px">Night minutes: <input id="nightMinutes" type="number" value="59" style="width:80px"></label>
+      </div>
+      <div style="margin-top:6px">
+        <label>Day starts at hour: <input id="dayStartHour" type="number" min="0" max="23" value="8" style="width:80px"></label>
+        <label style="margin-left:8px">Night starts at hour: <input id="nightStartHour" type="number" min="0" max="23" value="20" style="width:80px"></label>
+      </div>
+    </div>
+    <button id="startEvery">Start Every</button>
+    <button id="runNow">Run Now</button>
+    <button id="analyzePending">Analyze Pending</button>
+    <button id="status">Status</button>
+    <button id="cancel">Cancel</button>
+    <button id="themeToggle" title="Toggle dark mode">Toggle theme</button>
+    <button id="populateDb">Populate DB</button>
+    <button id="enableSound">Enable sound</button>
+    <span id="countdownWrap" style="margin-left:12px; display:none">
+      Next run in: <strong id="countdown">--:--</strong>
+    </span>
+  </div>
+
+  <div style="margin-top:8px">
+    <label>Start time (manual run):
+      <input id="startTime" type="datetime-local" />
+    </label>
+  </div>
+
+  <h3>Result</h3>
+  <pre id="out">No actions yet</pre>
+
+  <hr />
+  <h2>Database Viewer</h2>
+  <div>
+    <label>Table:
+      <select id="tableSel">
+        <option value="facebook_posts">facebook_posts</option>
+        <option value="good_facebook_posts">good_facebook_posts</option>
+      </select>
+    </label>
+    <label style="margin-left:8px">Search text:
+      <input id="searchTxt" placeholder="contains..." />
+    </label>
+    <label style="margin-left:8px">Limit:
+      <input id="limit" type="number" value="25" style="width:70px" />
+    </label>
+    <label style="margin-left:8px">Offset:
+      <input id="offset" type="number" value="0" style="width:70px" />
+    </label>
+    <button id="loadPosts">Load Posts</button>
+  </div>
+
+  <div id="postsWrap">
+    <table id="postsTable" style="display:none">
+      <thead>
+        <tr></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="postsEmpty" style="display:none">No rows.</div>
+  </div>
+
+  <script>
+    const out = document.getElementById('out')
+    const webhookField = document.getElementById('webhook')
+
+    function log(o) { out.textContent = JSON.stringify(o, null, 2) }
+
+    // Countdown logic
+    let countdownTimer = null
+    let nextRunAtISO = null
+    function stopCountdown() {
+      if (countdownTimer) {
+        clearInterval(countdownTimer)
+        countdownTimer = null
+      }
+    }
+    function setCountdown(nextIso) {
+      nextRunAtISO = nextIso || null
+      const wrap = document.getElementById('countdownWrap')
+      const el = document.getElementById('countdown')
+      if (!nextRunAtISO) {
+        stopCountdown()
+        wrap.style.display = 'none'
+        el.textContent = '--:--'
+        return
+      }
+      const nextDate = new Date(nextRunAtISO)
+      if (isNaN(nextDate.getTime())) {
+        stopCountdown()
+        wrap.style.display = 'none'
+        el.textContent = '--:--'
+        return
+      }
+      wrap.style.display = 'inline'
+      // initial render immediately
+      function render() {
+        const now = new Date()
+        let diffMs = nextDate.getTime() - now.getTime()
+        if (diffMs < 0) diffMs = 0
+        const totalSec = Math.floor(diffMs / 1000)
+        const mm = String(Math.floor(totalSec / 60)).padStart(2, '0')
+        const ss = String(totalSec % 60).padStart(2, '0')
+        el.textContent = `${mm}:${ss}`
+      }
+      render()
+      stopCountdown()
+      countdownTimer = setInterval(render, 1000)
+    }
+
+    document.getElementById('startEvery').addEventListener('click', async () => {
+      const minutes = document.getElementById('minutes').value || 30
+      const webhook = webhookField.value || undefined
+      const body = webhook ? { webhook } : {}
+      const toggle = document.getElementById('toggleDayNight').checked
+      let url = ''
+      if (toggle) {
+        const dayMinutes = document.getElementById('dayMinutes').value
+        const nightMinutes = document.getElementById('nightMinutes').value
+        const dayStartHour = document.getElementById('dayStartHour').value
+        const nightStartHour = document.getElementById('nightStartHour').value
+        const params = new URLSearchParams()
+        if (dayMinutes) params.set('day_minutes', dayMinutes)
+        if (nightMinutes) params.set('night_minutes', nightMinutes)
+        if (dayStartHour) params.set('day_start_hour', dayStartHour)
+        if (nightStartHour) params.set('night_start_hour', nightStartHour)
+        url = `/start_every?${params.toString()}`
+      } else {
+        url = `/start_every?minutes=${minutes}`
+      }
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type':'application/json'}, body: JSON.stringify(body) })
+      const data = await res.json()
+      log(data)
+      // Prefer single next_run_at if present, else pick earliest from next_runs map
+      if (data && data.next_run_at) {
+        setCountdown(data.next_run_at)
+      } else if (data && data.next_runs) {
+        const vals = Object.values(data.next_runs || {}).filter(Boolean)
+        if (vals.length) {
+          const soonest = vals.sort((a,b) => new Date(a).getTime() - new Date(b).getTime())[0]
+          setCountdown(soonest)
+        } else {
+          setCountdown(null)
+        }
+      }
+    })
+
+    document.getElementById('runNow').addEventListener('click', async () => {
+      const webhook = webhookField.value || undefined
+      const body = webhook ? { webhook } : {}
+      const st = document.getElementById('startTime').value
+      const url = st ? `/run_now?start_time=${encodeURIComponent(st)}` : '/run_now'
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type':'application/json'}, body: JSON.stringify(body) })
+      log(await res.json())
+    })
+
+    document.getElementById('analyzePending').addEventListener('click', async () => {
+      const webhook = webhookField.value || undefined
+      const body = webhook ? { webhook } : {}
+      const res = await fetch('/analyze_pending', { method: 'POST', headers: { 'Content-Type':'application/json'}, body: JSON.stringify(body) })
+      log(await res.json())
+    })
+
+    document.getElementById('status').addEventListener('click', async () => {
+      const res = await fetch('/status')
+      const data = await res.json()
+      log(data)
+      if (data && data.next_run_at) setCountdown(data.next_run_at)
+      else setCountdown(null)
+    })
+
+    document.getElementById('cancel').addEventListener('click', async () => {
+      try {
+        const res = await fetch('/cancel', { method: 'POST' })
+        const data = await res.json()
+        log(data)
+        setCountdown(null)
+      } catch (e) {
+        // ignore
+      }
+    })
+
+    document.getElementById('populateDb').addEventListener('click', async () => {
+      try {
+        const res = await fetch('/populate_db', { method: 'POST' })
+        const data = await res.json()
+        log(data)
+        if (data.status === 'populated_db') {
+          alert('Database populated successfully!')
+        }
+      } catch (e) {
+        log({ error: 'Failed to populate DB', details: e.message })
+      }
+    })
+
+    // DB Viewer
+    const postsTable = document.getElementById('postsTable')
+    const postsEmpty = document.getElementById('postsEmpty')
+    const tbody = postsTable.querySelector('tbody')
+    const theadTr = postsTable.querySelector('thead tr')
+    // Theme toggle (persisted)
+    const themeToggle = document.getElementById('themeToggle')
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+    const savedTheme = localStorage.getItem('theme')
+    function applyTheme(mode) {
+      if (mode === 'dark') document.body.classList.add('dark')
+      else document.body.classList.remove('dark')
+      localStorage.setItem('theme', mode)
+    }
+    applyTheme(savedTheme || (prefersDark ? 'dark' : 'light'))
+    themeToggle.addEventListener('click', () => {
+      const next = document.body.classList.contains('dark') ? 'light' : 'dark'
+      applyTheme(next)
+    })
+
+    // Notification + sound
+    let lastSeenGoodId = null
+    let soundEnabled = true
+    let notificationTargetUrl = null
+
+    const banner = document.getElementById('notifyBanner')
+    const viewBtn = document.getElementById('viewPostBtn')
+    const dismissBtn = document.getElementById('dismissBannerBtn')
+
+    function showBanner(url) {
+      notificationTargetUrl = url || null
+      banner.style.display = 'block'
+    }
+    function hideBanner() {
+      banner.style.display = 'none'
+      notificationTargetUrl = null
+    }
+    viewBtn.addEventListener('click', () => {
+      if (notificationTargetUrl) window.open(notificationTargetUrl, '_blank')
+      hideBanner()
+    })
+    dismissBtn.addEventListener('click', hideBanner)
+
+    // Simple beep using Web Audio API (no external file needed)
+    function beep() {
+      if (!soundEnabled) return
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)()
+        const o = ctx.createOscillator()
+        const g = ctx.createGain()
+        o.type = 'sine'
+        o.frequency.value = 880
+        o.connect(g)
+        g.connect(ctx.destination)
+        g.gain.setValueAtTime(0.001, ctx.currentTime)
+        g.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.01)
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3)
+        o.start()
+        o.stop(ctx.currentTime + 0.3)
+      } catch {}
+    }
+
+    document.getElementById('enableSound').addEventListener('click', () => {
+      soundEnabled = true
+      beep()
+    })
+
+    async function fetchLatestGood() {
+      try {
+        const res = await fetch('/posts?table=good_facebook_posts&limit=1')
+        const data = await res.json()
+        const item = (data.items || [])[0]
+        if (!item) return
+        if (lastSeenGoodId === null) {
+          // Initialize without notifying on first load
+          lastSeenGoodId = item.id || null
+          return
+        }
+        if (item.id && item.id !== lastSeenGoodId) {
+          lastSeenGoodId = item.id
+          const url = item.url || item.inputUrl || null
+          showBanner(url)
+          beep()
+        }
+      } catch (e) {
+        // network or parsing error: ignore silently
+      }
+    }
+
+    // Poll every 15s
+    setInterval(fetchLatestGood, 15000)
+    // Also run once after a short delay to give server time on fresh boot
+    setTimeout(fetchLatestGood, 3000)
+
+    // Initial sync of status for countdown
+    ;(async () => {
+      try {
+        const r = await fetch('/status')
+        const d = await r.json()
+        if (d && d.next_run_at) setCountdown(d.next_run_at)
+        else if (d && (d.next_pipeline_job_day || d.next_pipeline_job_night)) {
+          const cands = [d.next_pipeline_job_day, d.next_pipeline_job_night].filter(Boolean)
+          if (cands.length) {
+            const soon = cands.sort((a,b) => new Date(a).getTime() - new Date(b).getTime())[0]
+            setCountdown(soon)
+          }
+        }
+      } catch {}
+    })()
+
+    function renderPosts(items, columns) {
+      tbody.innerHTML = ''
+      // Build header to match columns
+      theadTr.innerHTML = ''
+      for (const col of columns) {
+        const th = document.createElement('th')
+        th.textContent = col.label
+        theadTr.appendChild(th)
+      }
+      if (!items || !items.length) {
+        postsTable.style.display = 'none'
+        postsEmpty.style.display = 'block'
+        return
+      }
+      postsEmpty.style.display = 'none'
+      postsTable.style.display = 'table'
+      for (const it of items) {
+        const tr = document.createElement('tr')
+        columns.forEach((col) => {
+          let val = it[col.key]
+          if (col.key === 'text') val = (val || '').slice(0, 160)
+          const td = document.createElement('td')
+          // Make link columns clickable
+          if (col.isLink) {
+            const url = String(val || '')
+            if (url.startsWith('http')) {
+              const a = document.createElement('a')
+              a.href = url
+              a.textContent = url
+              a.target = '_blank'
+              td.appendChild(a)
+            } else {
+              td.textContent = url
+            }
+          } else {
+            td.textContent = val ?? ''
+          }
+          tr.appendChild(td)
+        })
+        tbody.appendChild(tr)
+      }
+    }
+
+    document.getElementById('loadPosts').addEventListener('click', async () => {
+      const table = document.getElementById('tableSel').value
+      const search = document.getElementById('searchTxt').value
+      const limit = document.getElementById('limit').value || 25
+      const offset = document.getElementById('offset').value || 0
+      const params = new URLSearchParams({ table, limit, offset })
+      if (search) params.set('search', search)
+      const res = await fetch(`/posts?${params.toString()}`)
+      const data = await res.json()
+      // Define columns exactly as backend returns per table
+      const common = [
+        { key: 'url', label: 'url', isLink: true },
+        { key: 'time', label: 'time' },
+        { key: 'text', label: 'text' },
+        { key: 'attachments', label: 'attachments', isLink: true },
+        { key: 'likesCount', label: 'likes' },
+        { key: 'commentsCount', label: 'comments' },
+        { key: 'inputUrl', label: 'inputUrl', isLink: true },
+      ]
+      const columns = table === 'good_facebook_posts'
+        ? common
+        : [...common, { key: 'status', label: 'status' }, { key: 'motivo', label: 'motivo' }]
+      renderPosts(data.items, columns)
+    })
+
+    // Toggle UI visibility for day/night settings
+    const toggleDayNight = document.getElementById('toggleDayNight')
+    const dayNightWrap = document.getElementById('dayNightWrap')
+    toggleDayNight.addEventListener('change', () => {
+      dayNightWrap.style.display = toggleDayNight.checked ? 'block' : 'none'
+    })
+  </script>
+</body>
+</html>
