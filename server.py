@@ -20,6 +20,7 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI(title='Pipeline Scheduler')
 db = DB()
 LAST_RUN_TIME = None  # ISO-like string used for next scheduled run start (persisted)
+LAST_SKIPPED_BASELINE = None  # Guard to avoid repeated skip resets until a successful run advances LAST_RUN_TIME
 
 # Serve the simple frontend from ./static
 static_dir = Path(__file__).parent / 'static'
@@ -128,6 +129,84 @@ def analyze_pending_run(webhook_url=None):
         logging.info('No new accepted items from pending analysis')
 
 
+def _minutes_from_cfg(cfg: dict | None) -> int | None:
+    """Return a representative minutes interval from scheduler cfg.
+    For day/night mode, prefer the currently active window's minutes.
+    """
+    if not cfg:
+        return None
+    minutes = cfg.get('minutes')
+    if minutes:
+        try:
+            return int(minutes)
+        except Exception:
+            return None
+    # day/night: pick based on current hour
+    try:
+        now_h = datetime.now().hour
+        day_start = int(cfg.get('day_start_hour') or 8)
+        night_start = int(cfg.get('night_start_hour') or 20)
+        m_day = cfg.get('minutes_day')
+        m_night = cfg.get('minutes_night')
+        if m_day is None and m_night is None:
+            return None
+        # Determine if we are in day window [day_start, night_start)
+        in_day = False
+        if day_start < night_start:
+            in_day = day_start <= now_h < night_start
+        elif day_start > night_start:
+            # degenerate: day wraps across midnight, treat day as full day
+            in_day = True
+        # Prefer window-specific minutes if defined, else fallback to the other
+        if in_day:
+            return int(m_day) if m_day is not None else (int(m_night) if m_night is not None else None)
+        else:
+            return int(m_night) if m_night is not None else (int(m_day) if m_day is not None else None)
+    except Exception:
+        return None
+
+
+def check_missed_runs():
+    """Background monitor that detects missed runs and schedules a catch-up run if overdue."""
+    try:
+        cfg = db.get_scheduler_config()
+        global LAST_SKIPPED_BASELINE
+        if not cfg or not cfg.get('active') or not LAST_RUN_TIME:
+            return
+        last_run = datetime.fromisoformat(LAST_RUN_TIME.replace('.000', ''))
+        now = datetime.now()
+        minutes = _minutes_from_cfg(cfg)
+        if not minutes:
+            return
+        # If it's been longer than expected since last run, skip any queued immediate run by resetting the schedule
+        if (now - last_run).total_seconds() > minutes * 60 * 1.5 and LAST_SKIPPED_BASELINE != LAST_RUN_TIME:
+            try:
+                if cfg.get('minutes'):
+                    # Single-interval mode: remove and re-add interval job so next_run_time moves to future
+                    logging.warning("Missed run detected. Skipping queued run by resetting 'pipeline_job' next schedule.")
+                    try:
+                        scheduler.remove_job('pipeline_job')
+                    except Exception:
+                        pass
+                    scheduler.add_job(lambda: scheduled_run(webhook_url=cfg.get('webhook')), 'interval', minutes=int(cfg.get('minutes')), id='pipeline_job')
+                elif cfg.get('minutes_day') or cfg.get('minutes_night'):
+                    # Day/night mode: re-schedule cron jobs to clear any misfire immediate runs
+                    logging.warning("Missed run detected. Skipping queued run(s) by resetting day/night schedules.")
+                    _schedule_day_night(
+                        int(cfg.get('minutes_day')) if cfg.get('minutes_day') is not None else None,
+                        int(cfg.get('minutes_night')) if cfg.get('minutes_night') is not None else None,
+                        int(cfg.get('day_start_hour') or 8),
+                        int(cfg.get('night_start_hour') or 20),
+                        cfg.get('webhook')
+                    )
+                # mark that we already skipped for this baseline; will clear on successful run when LAST_RUN_TIME changes
+                LAST_SKIPPED_BASELINE = LAST_RUN_TIME
+            except Exception as e:
+                logging.exception(f"Failed to reset pipeline_job schedule: {e}")
+    except Exception as e:
+        logging.exception(f"Failed to check for missed runs: {e}")
+
+
 def _schedule_day_night(minutes_day: int | None, minutes_night: int | None, day_start_hour: int, night_start_hour: int, webhook: str | None):
     """Configure day/night cron jobs based on provided minutes and hour boundaries.
     Removes any existing day/night jobs and creates new ones for the provided windows.
@@ -165,7 +244,7 @@ def _schedule_day_night(minutes_day: int | None, minutes_night: int | None, day_
 @app.on_event('startup')
 def startup():
     """Restore persisted scheduler state and seen IDs."""
-    global LAST_RUN_TIME, LAST_SEEN_IDS
+    global LAST_RUN_TIME, LAST_SEEN_IDS, LAST_SKIPPED_BASELINE
     try:
         # Restore last run time
         LAST_RUN_TIME = db.get_last_run_time()
@@ -202,6 +281,32 @@ def startup():
     except Exception as e:
         logging.exception('Failed to restore scheduler state: %s', e)
 
+    # Missed-run detection at startup and start periodic monitor
+    try:
+        cfg = db.get_scheduler_config()
+        if cfg.get('active') and LAST_RUN_TIME:
+            last_run = datetime.fromisoformat(LAST_RUN_TIME.replace('.000', ''))
+            now = datetime.now()
+            minutes = _minutes_from_cfg(cfg)
+            if minutes and (now - last_run).total_seconds() > minutes * 60 * 1.5 and LAST_SKIPPED_BASELINE != LAST_RUN_TIME:
+                # Skip any queued immediate execution by resetting the interval job
+                try:
+                    if cfg.get('minutes'):
+                        logging.warning("Detected missed runs at startup. Resetting 'pipeline_job' schedule to skip queued run.")
+                        try:
+                            scheduler.remove_job('pipeline_job')
+                        except Exception:
+                            pass
+                        scheduler.add_job(lambda: scheduled_run(webhook_url=cfg.get('webhook')), 'interval', minutes=int(cfg.get('minutes')), id='pipeline_job')
+                        LAST_SKIPPED_BASELINE = LAST_RUN_TIME
+                except Exception as e:
+                    logging.exception(f"Failed to reset pipeline_job schedule at startup: {e}")
+        # Start the periodic missed-run detector (every 2 minutes)
+        if scheduler.get_job('missed_run_detector') is None:
+            scheduler.add_job(check_missed_runs, 'interval', minutes=2, id='missed_run_detector')
+            logging.info('Started missed-run detection monitor (every 2 minutes)')
+    except Exception as e:
+        logging.exception(f"Failed to initialize missed-run detection: {e}")
 
 @app.on_event('shutdown')
 def shutdown():
@@ -315,7 +420,8 @@ def status():
         info.update({'next_run_at': next_run_at, 'every_minutes': every_minutes})
     # include persisted config snapshot and next runs for day/night jobs
     try:
-        info.update({'persisted': db.get_scheduler_config()})
+        cfg = db.get_scheduler_config()
+        info.update({'persisted': cfg})
         for jid in ('pipeline_job_day', 'pipeline_job_night'):
             j = scheduler.get_job(jid)
             if j is not None:
@@ -323,6 +429,20 @@ def status():
                     info[f'next_{jid}'] = j.next_run_time.isoformat() if j.next_run_time else None
                 except Exception:
                     info[f'next_{jid}'] = None
+        # Missed run diagnostics
+        try:
+            minutes = _minutes_from_cfg(cfg)
+            if LAST_RUN_TIME and minutes:
+                last_run_dt = datetime.fromisoformat(LAST_RUN_TIME.replace('.000', ''))
+                overdue_sec = (datetime.now() - last_run_dt).total_seconds()
+                threshold = minutes * 60 * 1.5
+                info['missed_run'] = overdue_sec > threshold
+                info['missed_by_minutes'] = int(overdue_sec // 60) if overdue_sec > threshold else 0
+            else:
+                info['missed_run'] = False
+                info['missed_by_minutes'] = 0
+        except Exception:
+            pass
     except Exception:
         pass
     return info
