@@ -40,7 +40,7 @@ Prerequisites
 Build and start
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
 Access
