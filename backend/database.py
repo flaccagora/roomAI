@@ -70,6 +70,8 @@ class DB():
                 self.c.execute("ALTER TABLE scheduler_config ADD COLUMN day_start_hour INTEGER DEFAULT 8")
             if 'night_start_hour' not in cols:
                 self.c.execute("ALTER TABLE scheduler_config ADD COLUMN night_start_hour INTEGER DEFAULT 20")
+            if 'last_scrape_time_from' not in cols:
+                self.c.execute("ALTER TABLE scheduler_config ADD COLUMN last_scrape_time_from TEXT")
             self.conn.commit()
         except Exception:
             pass
@@ -197,7 +199,7 @@ class DB():
     def get_scheduler_config(self):
         """Return scheduler config singleton as a dict including time-of-day fields."""
         row = self.c.execute(
-            "SELECT active, minutes, webhook, last_run_time, minutes_day, minutes_night, day_start_hour, night_start_hour FROM scheduler_config WHERE id = 1"
+            "SELECT active, minutes, webhook, last_run_time, last_scrape_time_from, minutes_day, minutes_night, day_start_hour, night_start_hour FROM scheduler_config WHERE id = 1"
         ).fetchone()
         if not row:
             return {"active": 0, "minutes": None, "webhook": None, "last_run_time": None,
@@ -209,13 +211,14 @@ class DB():
             "minutes": d.get("minutes"),
             "webhook": d.get("webhook"),
             "last_run_time": d.get("last_run_time"),
+            "last_scrape_time_from": d.get("last_scrape_time_from"),
             "minutes_day": d.get("minutes_day"),
             "minutes_night": d.get("minutes_night"),
             "day_start_hour": d.get("day_start_hour") if d.get("day_start_hour") is not None else 8,
             "night_start_hour": d.get("night_start_hour") if d.get("night_start_hour") is not None else 20,
         }
 
-    def upsert_scheduler_config(self, active=None, minutes=None, webhook=None, last_run_time=None,
+    def upsert_scheduler_config(self, active=None, minutes=None, webhook=None, last_run_time=None, last_scrape_time_from=None,
                                 minutes_day=None, minutes_night=None, day_start_hour=None, night_start_hour=None):
         """Upsert fields into the singleton scheduler_config row (id=1)."""
         # Read current
@@ -225,6 +228,7 @@ class DB():
             "minutes": minutes if minutes is not None else current.get("minutes"),
             "webhook": webhook if webhook is not None else current.get("webhook"),
             "last_run_time": last_run_time if last_run_time is not None else current.get("last_run_time"),
+            "last_scrape_time_from": last_scrape_time_from if last_scrape_time_from is not None else current.get("last_scrape_time_from"),
             "minutes_day": minutes_day if minutes_day is not None else current.get("minutes_day"),
             "minutes_night": minutes_night if minutes_night is not None else current.get("minutes_night"),
             "day_start_hour": day_start_hour if day_start_hour is not None else current.get("day_start_hour", 8),
@@ -232,13 +236,14 @@ class DB():
         }
         self.c.execute(
             """
-            INSERT INTO scheduler_config (id, active, minutes, webhook, last_run_time, minutes_day, minutes_night, day_start_hour, night_start_hour)
-            VALUES (1, :active, :minutes, :webhook, :last_run_time, :minutes_day, :minutes_night, :day_start_hour, :night_start_hour)
+            INSERT INTO scheduler_config (id, active, minutes, webhook, last_run_time, last_scrape_time_from, minutes_day, minutes_night, day_start_hour, night_start_hour)
+            VALUES (1, :active, :minutes, :webhook, :last_run_time, :last_scrape_time_from, :minutes_day, :minutes_night, :day_start_hour, :night_start_hour)
             ON CONFLICT(id) DO UPDATE SET
                 active=excluded.active,
                 minutes=excluded.minutes,
                 webhook=excluded.webhook,
                 last_run_time=excluded.last_run_time,
+                last_scrape_time_from=excluded.last_scrape_time_from,
                 minutes_day=excluded.minutes_day,
                 minutes_night=excluded.minutes_night,
                 day_start_hour=excluded.day_start_hour,

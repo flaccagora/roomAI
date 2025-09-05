@@ -107,6 +107,10 @@ def scheduled_run(webhook_url=None, start_time: str | None = None):
         LAST_RUN_TIME = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000')
         # persist
         db.set_last_run_time(LAST_RUN_TIME)
+        db.upsert_scheduler_config(
+            last_scrape_time_from=eff_start,
+        )
+
     except Exception:
         pass
 
