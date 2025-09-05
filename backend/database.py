@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv  
 load_dotenv()
@@ -105,7 +106,7 @@ class DB():
         for item in items:
                 
             try:
-                if item.get('id') == None:
+                if item.get('id') == None and item.get('post_id') == None:
                     raise Exception("Item id is None")
                 user = item.get('user') if isinstance(item.get('user'), dict) else None
                 user_id = user.get('id') if user else None
@@ -115,23 +116,22 @@ class DB():
                     a = item.get('attachments')[0]
                     if isinstance(a, dict):
                         attachments = a.get('url')
-                params = (
-                    item.get('url'),
-                    item.get('time'),
-                    user_id,
-                    item.get('text'),
-                    item.get('topReactionsCount'),
-                    item.get('feedbackId'),
-                    item.get('id'),
-                    item.get('legacyId'),
-                    attachments,
-                    item.get('likesCount'),
-                    item.get('sharesCount'),
-                    item.get('commentsCount'),
-                    item.get('facebookId'),
-                    item.get('groupTitle'),
-                    item.get('inputUrl'),
-                    item.get('status')
+                params = (item.get('url'),
+                    item.get('time') or datetime.fromtimestamp(item.get('timestamp')).strftime('%Y-%m-%dT%H:%M:%S.000'),
+                    user_id or None,
+                    item.get('text') or item.get('message'),
+                    item.get('topReactionsCount') or item.get('reactions_count'),
+                    item.get('feedbackId') or None,
+                    item.get('id') or item.get('post_id'),
+                    item.get('legacyId') or None,
+                    attachments or None,
+                    item.get('likesCount') or None,
+                    item.get('sharesCount') or item.get('reshare_count'),
+                    item.get('commentsCount') or item.get('comments_count'),
+                    item.get('facebookId') or None,
+                    item.get('groupTitle') or None,
+                    item.get('inputUrl') or None,
+                    item.get('status') or None
                 )
                 self.c.execute(f"""
                 INSERT OR IGNORE INTO {table} (

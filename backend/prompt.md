@@ -5,7 +5,7 @@ Analizza attentamente il seguente annuncio di affitto e verifica se rispetta **T
 2. Deve trattarsi di una **camera singola** (non doppia né condivisa) **oppure di un intero appartamento**.  
 3. Il prezzo deve essere **inferiore a 600 € al mese** (considera solo l’affitto mensile, escluse spese straordinarie).  
    - Se il prezzo non è specificato, consideralo come **inferiore a 650 €**.  
-4. L’offerta non deve essere esclusivamente rivolta a ragazze o solo coinquiline donne ma anche a uomini indipendentemente dall'essere studenti, lavoratori o altro.  
+4. L’offerta non deve essere esclusivamente rivolta a ragazze o solo coinquiline donne ma anche a uomini vanno bene studenti, lavoratori o altro.  
 
 ### Procedura anti-errore per il punto 1 (OBBLIGATORIA)
 Prima di valutare gli altri criteri, CLASSIFICA l’annuncio in uno dei seguenti tipi (non restituire questa classificazione nel JSON, usala solo per decidere):

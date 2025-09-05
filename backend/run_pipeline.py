@@ -3,7 +3,7 @@
 Usage: set APIFY_TOKEN and ensure local Ollama LLM is running at http://localhost:11434
 """
 from datetime import datetime, timedelta
-from backend.scraper import Scraper
+from backend.scraper import Scraper, PostScraper
 from backend.database import DB
 from backend.analyzer import LLMAnalizer
 from backend.telegram_bot import BOT
@@ -36,12 +36,22 @@ def run_pipeline(apify_token=None, db_path=None, start_time = None, telegram_not
     lookback_minutes = int(os.getenv('LOOKBACK_MINUTES', str(lookback_minutes)))
     limit = int(os.getenv('SCRAPE_LIMIT', str(limit)))
     llama_model = os.getenv('OLLAMA_MODEL', 'llama3:latest')
+    scraper_type = os.getenv('SCRAPE_TYPE', 'group')
+    query = os.getenv('SCRAPE_QUERY', 'affitti torino')
 
     # Compute start time: onlyPostsNewerThan expects ISO-like string
-    start_time = start_time or (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%dT%H:%M:%S.000')
+    if scraper_type == 'group':
+        start_time = start_time or (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%dT%H:%M:%S.000')
+        id_string = "id"
+        scraper = Scraper(start_time=start_time, limit=limit, apify_token=apify_token)
+    elif scraper_type == 'post':
+        start_time = start_time or (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+        id_string = "post_id"
+        scraper = PostScraper(start_time=start_time, query=query, limit=limit, apify_token=apify_token)
+    else:
+        raise ValueError(f"Invalid scraper type: {scraper_type}, set scraper type to 'group' or 'post' in .env file")
     logging.info('Scraping starts at %s', start_time)
-
-    scraper = Scraper(start_time=start_time, limit=limit, apify_token=apify_token)
+    
     db = DB(path=db_path)
     analyzer = LLMAnalizer(llama_model)
     bot = BOT()
@@ -76,8 +86,8 @@ def run_pipeline(apify_token=None, db_path=None, start_time = None, telegram_not
                 if telegram_notification:
                     bot.send_message(f"Nuovo post accettato: {item.get('text')}\n url:\n {item.get('url')}")
 
-            db.update_item_field(item.get('id'), 'status', status)
-            db.update_item_field(item.get('id'), 'motivo', motivo)
+            db.update_item_field(item.get(id_string), 'status', status)
+            db.update_item_field(item.get(id_string), 'motivo', motivo)
 
         except Exception as e:
             logging.exception('Analysis failed for item id=%s: %s', item.get('id'), e)
@@ -125,8 +135,9 @@ def analyze_pending(db_path=None, limit=100, telegram_notification=True):
                 if telegram_notification:
                     bot.send_message(f"Nuovo post accettato: {item.get('text')}\n url: {item.get('url')}")
 
-            db.update_item_field(item.get('id'), 'status', status)
-            db.update_item_field(item.get('id'), 'motivo', motivo)
+            id_string = "id" if item.get('id') else "post_id"
+            db.update_item_field(item.get(id_string), 'status', status)
+            db.update_item_field(item.get(id_string), 'motivo', motivo)
             logging.info('Updated item %d of %d', count, len(items))
         except Exception as e:
             logging.exception('Analysis failed for pending item id=%s: %s', item.get('id'), e)

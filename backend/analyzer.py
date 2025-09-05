@@ -15,41 +15,17 @@ class LLMAnalizer():
             self.prompt = f.read()
         self.llm = llm
 
-    # def analize_post(self, post):
-        
-    #     # Send the prompt to local Ollama LLM
-    #     response = requests.post(
-    #         "http://localhost:11434/api/generate",
-    #         json={
-    #             "model": self.llm,
-    #             "prompt": self.prompt + post["text"],
-    #             "stream": False,
-    #             "format": {
-    #                 "type": "object",
-    #                 "properties": {
-    #                 "stato": {
-    #                     "type": "string"
-    #                 },
-    #                 "motivo": {
-    #                     "type": "string"
-    #                 }
-    #                 }
-    #             }
-    #         }
-    #     )
-    #     analysis = response.json()["response"]
-
-    #     analysis_dict = json.loads(analysis)
-    #     print(analysis_dict)
-
-    #     return analysis_dict
-
     def analize_post(self, post):
+
+        try:
+            post_text = post["text"]
+        except KeyError:
+            post_text = post["message"]
 
         response = chat(
         messages=[
             {'role': 'system', 'content': self.prompt},
-            {'role': 'user', 'content': post["text"]}
+            {'role': 'user', 'content': post_text}
         ],
         model=self.llm,
         format=Output.model_json_schema(),

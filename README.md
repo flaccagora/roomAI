@@ -41,6 +41,8 @@ SCRAPE_LIMIT=5
 OLLAMA_MODEL=qwen3:latest
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 TELEGRAM_CHAT_ID=your_telegram_chat_id_here
+SCRAPE_TYPE=group or post
+SCRAPE_QUERY="search query" // inactive if SCRAPE_TYPE=group
 ```
 
 ### Custom Prompt
