@@ -229,8 +229,6 @@ def start_every(minutes: int | None = 30, day_minutes: int | None = None, night_
     # Initialize LAST_RUN_TIME so that the first scheduled run uses 'now' as a baseline
     global LAST_RUN_TIME
     try:
-        from datetime import datetime
-        LAST_RUN_TIME = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000')
         db.upsert_scheduler_config(
             active=1,
             minutes=int(minutes) if minutes is not None else None,
